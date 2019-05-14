@@ -46,6 +46,7 @@ class Task(db.Model):
     category = db.Column(db.Text)
     stage = db.Column(db.Text)
     done = db.Column(db.Text)
+    delete = db.Column(db.Boolean)
     def __repr__(self):
         return f"Post('{self.title}', '{self.date_posted}')"
 
@@ -56,12 +57,15 @@ db.create_all()
 
 # Создание запросов
 
+# Домашняя страница
 @app.route('/home')
 def home():
     if 'username' not in session:
         return redirect('register')
     return render_template('home.html', username=session['username'], tasks=Task.query.filter_by(user_name=session['username']))
 
+
+# Регистрация
 @app.route('/')
 @app.route('/register', methods=['GET', 'POST'])
 def register():
@@ -105,6 +109,7 @@ def login():
     return render_template('login.html', title='Login', form=form)
 
 
+# Добавление задачи
 @app.route('/add-task', methods=['GET', 'POST'])
 def add_task():
     form = TaskForm()
@@ -116,6 +121,55 @@ def add_task():
         db.session.commit()
         return redirect('home')
     return render_template('add-task.html', title='Add task', form=form, username=session['username'])
+
+
+# Редактирование задачи
+@app.route('/edit-task/<int:task_id>', methods=['GET', 'POST'])
+def edit_task(task_id):
+    if 'username' not in session:
+        return redirect('login')
+    if session['username'] != Task.query.filter_by(id=task_id).first().user_name:
+        return redirect('home')
+    val = Task.query.filter_by(id=task_id).first()
+    form = TaskForm()
+    if form.validate_on_submit():
+        val.title = form.title.data
+        val.content = form.content.data
+        val.executor = form.executor.data
+        val.date_done = form.date_done.data
+        val.priority = form.priority.data
+        val.category = form.category.data
+        val.stage = form.stage.data
+        val.done = form.done.data
+        db.session.commit()
+        return redirect('home')
+    return render_template('edit-task.html', form=form, val=val)
+
+
+# Получение полной информации о задаче
+@app.route('/task/<int:task_id>')
+def task_info(task_id):
+    if 'username' not in session:
+        return redirect('login')
+    if session['username'] != Task.query.filter_by(id=task_id).first().user_name:
+        return redirect('home')
+    return render_template('task.html', task=Task.query.filter_by(id=task_id).first())
+
+
+# Удаление записи
+@app.route('/del-task/<int:task_id>')
+def task_del(task_id):
+    if 'username' not in session:
+        return redirect('login')
+    if session['username'] != Task.query.filter_by(id=task_id).first().user_name:
+        return redirect('home')
+    task = Task.query.filter_by(id=task_id).first()
+    if task.delete:
+        task.delete = False
+    else:
+        task.delete = True
+    db.session.commit()
+    return redirect('home')
 
 
 # Выход из аккаунта
