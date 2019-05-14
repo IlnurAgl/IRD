@@ -1,8 +1,7 @@
 from flask import Flask, render_template, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
-from forms import RegistrationForm, LoginForm, TaskForm
+from forms import RegistrationForm, LoginForm, TaskForm, GiveForm
 from flask_login import UserMixin
-from datetime import datetime
 from flask_bcrypt import Bcrypt
 
 session = {}
@@ -29,6 +28,8 @@ class User(db.Model, UserMixin):
     username = db.Column(db.String(20), unique=True, nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
     password = db.Column(db.String(60), nullable=False)
+    admin = db.Column(db.Boolean, default=False)
+    status = db.Column(db.Boolean, default=True)
 
     def __repr__(self):
         return f"User('{self.username}', '{self.email}', '{self.image_file}')"
@@ -58,15 +59,15 @@ db.create_all()
 # Создание запросов
 
 # Домашняя страница
+@app.route('/')
 @app.route('/home')
 def home():
     if 'username' not in session:
         return redirect('register')
-    return render_template('home.html', username=session['username'], tasks=Task.query.filter_by(user_name=session['username']))
+    return render_template('home.html', username=session['username'], tasks=Task.query.filter_by(user_name=session['username']), user=User.query.filter_by(username=session['username']).first())
 
 
 # Регистрация
-@app.route('/')
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if 'username' in session:
@@ -82,7 +83,7 @@ def register():
             flash('Пользователь с такой почтой уже зарегистрирован в системе')
             return render_template('register.html', title='Регистрация', form=form)        
         hashed_password = bcrypt.generate_password_hash(form.password.data).decode('utf-8')
-        user = User(username=form.username.data, email=form.email.data, password=hashed_password)
+        user = User(username=form.username.data, email=form.email.data, password=hashed_password, admin=False)
         db.session.add(user)
         db.session.commit()
         return redirect(url_for('login'))
@@ -109,12 +110,49 @@ def login():
     return render_template('login.html', title='Login', form=form)
 
 
+# Страница для администратора
+@app.route('/users')
+def admin():
+    if 'username' not in session:
+        return redirect('login')
+    if not User.query.filter_by(username=session['username']).first().admin:
+        return redirect('home')
+    return render_template('users.html', users=User.query.all())
+
+
+@app.route('/status_change/<int:user_id>')
+def status_change(user_id):
+    if 'username' not in session:
+        return redirect('login')
+    if not User.query.filter_by(username=session['username']).first().admin:
+        return redirect('home')
+    user = User.query.filter_by(id=user_id).first()
+    if user.status:
+        user.status = False
+    else:
+        user.status = True
+    db.session.commit()
+    return redirect('/users')
+
+@app.route('/admin_change/<int:user_id>')
+def admin_change(user_id):
+    if 'username' not in session:
+        return redirect('login')    
+    if not User.query.filter_by(username=session['username']).first().admin:
+        return redirect('home')
+    user = User.query.filter_by(id=user_id).first()
+    user.admin = True
+    db.session.commit()
+    return redirect('/users')
+
 # Добавление задачи
 @app.route('/add-task', methods=['GET', 'POST'])
 def add_task():
     form = TaskForm()
     if 'username' not in session:
         return redirect('login')
+    if not User.query.filter_by(username=session['username']).first().status:
+        return redirect('home')
     if form.validate_on_submit():
         task = Task(title=form.title.data, content=form.content.data, user_name=session['username'], executor=form.executor.data, priority=form.priority.data, category=form.category.data, stage=form.stage.data, done=form.done.data, date_done=str(form.date_done.data))
         db.session.add(task)
@@ -128,7 +166,7 @@ def add_task():
 def edit_task(task_id):
     if 'username' not in session:
         return redirect('login')
-    if session['username'] != Task.query.filter_by(id=task_id).first().user_name:
+    if not User.query.filter_by(username=session['username']).first().status:
         return redirect('home')
     val = Task.query.filter_by(id=task_id).first()
     form = TaskForm()
@@ -143,7 +181,7 @@ def edit_task(task_id):
         val.done = form.done.data
         db.session.commit()
         return redirect('home')
-    return render_template('edit-task.html', form=form, val=val)
+    return render_template('edit-task.html', form=form, val=val, users=User.query.all())
 
 
 # Получение полной информации о задаче
@@ -151,9 +189,27 @@ def edit_task(task_id):
 def task_info(task_id):
     if 'username' not in session:
         return redirect('login')
-    if session['username'] != Task.query.filter_by(id=task_id).first().user_name:
+    if session['username'] not in Task.query.filter_by(id=task_id).first().user_name.split():
         return redirect('home')
     return render_template('task.html', task=Task.query.filter_by(id=task_id).first())
+
+
+# Отправка задачи
+@app.route('/give_task/<int:task_id>')
+def give_task(task_id):
+    if 'username' not in session:
+        return redirect('login')
+    if session['username'] not in Task.query.filter_by(id=task_id).first().user_name.split():
+        return redirect('home')
+    task = Task.query.filter_by(id=task_id).first()
+    form = GiveForm()
+    if form.validate_on_submit():
+        user_id = form.user_id.data
+        if not User.query.filter_by(id=user_id).first():
+            return redirect('give_task')
+        task.user_name += ' ' + User.query.filter_by(id=user_id).first().username
+        return redirect('home')
+    return render_template('give_task.html', users=User.query.all())
 
 
 # Удаление записи
@@ -161,7 +217,7 @@ def task_info(task_id):
 def task_del(task_id):
     if 'username' not in session:
         return redirect('login')
-    if session['username'] != Task.query.filter_by(id=task_id).first().user_name:
+    if session['username'] not in Task.query.filter_by(id=task_id).first().user_name.split():
         return redirect('home')
     task = Task.query.filter_by(id=task_id).first()
     if task.delete:
